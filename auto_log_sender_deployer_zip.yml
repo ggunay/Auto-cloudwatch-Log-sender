@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Setup for Lambda function and EventBridge scheduler with customizable parameters.
+
+Parameters:
+  QueryString:
+    Type: String
+    Default: 'fields @timestamp, @message | filter @message like /"error"/ | sort @timestamp desc'
+    Description: The CloudWatch Logs Insights query to run.
+
+  DaysInterval:
+    Type: Number
+    Default: 7
+    Description: Interval in days on which the function will run and logs will be queried.
+
+  EmailAddress:
+    Type: String
+    Description: The email address to send query results to.
+
+  LogGroupNames:
+    Type: String
+    Description: Names of the log groups to query.
+
+  TimeToWaitForQueryCompletion:
+    Type: Number
+    Default: 60
+    Description: Time in seconds to wait for the query to complete.
+
+Resources:
+  QueryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.8
+      Timeout: 180
+      Code:
+        S3Bucket: <YOUR_S3_BUCKET_NAME>
+        S3Key: <YOUR_ZIP_FILE_NAME>
+      # Environment and other resources remain the same as in the inline version
+
+      Environment:
+        Variables:
+          QUERY_STRING: !Ref QueryString
+          DAYS_INTERVAL: !Ref DaysInterval
+          EMAIL_ADDRESS: !Ref EmailAddress
+          LOG_GROUP_NAMES: !Ref LogGroupNames
+          TIME_TO_WAIT_FOR_QUERY_COMPLETION: !Ref TimeToWaitForQueryCompletion
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaCloudWatchLogsSESAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:StartQuery
+            - logs:GetQueryResults
+            - ses:SendEmail
+            - ses:SendRawEmail
+            Resource: "*"
+
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: !Sub "rate(${DaysInterval} days)"
+      Targets:
+        - Arn: !GetAtt QueryFunction.Arn
+          Id: "QueryFunctionTarget"
+          Input: "{}"
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QueryFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRule.Arn
